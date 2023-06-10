@@ -24,6 +24,7 @@ def response_to_chat_message(response: dict[str, Any]) -> ChatMessage | None:
 
 
 class ChatGPTSession(ChatSession):
+    input_fields: Set[str] = {"role", "content", "name"}
     api_url: HttpUrl = "https://api.openai.com"
     api_type: str = "openai"
     api_version: str = "2023-05-15-preview"
@@ -176,12 +177,12 @@ class ChatGPTSession(ChatSession):
     def gen_with_tools(
         self,
         prompt: str,
-        tools: list[Any],
-        client: Client,
-        system: str | None = None,
-        save_messages: bool | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        tools: List[Any],
+        client: Union[Client, AsyncClient],
+        system: str = None,
+        save_messages: bool = None,
+        params: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
         # call 1: select tool and populate context
         tools_list = "\n".join(f"{i+1}: {f.__doc__}" for i, f in enumerate(tools))
         tool_prompt_format = TOOL_PROMPT.format(tools=tools_list)
