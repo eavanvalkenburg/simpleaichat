@@ -42,13 +42,11 @@ class ChatGPTSession(ChatSession):
                 "Content-Type": "application/json",
                 "api-key": f"{self.auth['api_key'].get_secret_value()}",
             }
-            endpoint = f"{self.api_url}/openai/deployments/{self.model}/chat/completions?api-version={self.api_version}"
         else:
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.auth['api_key'].get_secret_value()}",
             }
-            endpoint = f"{self.api_url}/v1/chat/completions"
 
         system_message = ChatMessage(role="system", content=system or self.system)
         user_message = ChatMessage(role="user", content=prompt)
@@ -61,7 +59,27 @@ class ChatGPTSession(ChatSession):
             **gen_params,
         }
 
-        return endpoint, headers, data, user_message
+        # Add function calling parameters if a schema is provided
+        if input_schema or output_schema:
+            functions = []
+            if input_schema:
+                input_function = self.schema_to_function(input_schema)
+                functions.append(input_function)
+            if output_schema:
+                output_function = self.schema_to_function(output_schema)
+                functions.append(output_function)
+                data["function_call"] = {"name": output_schema.__name__}
+            data["functions"] = functions
+
+        return headers, data, user_message
+
+    def schema_to_function(self, schema: Any):
+        assert schema.__doc__, f"{schema.__name__} is missing a docstring."
+        return {
+            "name": schema.__name__,
+            "description": schema.__doc__,
+            "parameters": schema.schema(),
+        }
 
     def gen(
         self,
