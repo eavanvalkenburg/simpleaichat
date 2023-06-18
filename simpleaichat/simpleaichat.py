@@ -357,6 +357,8 @@ class AsyncAIChat(AIChat):
                 system=system,
                 save_messages=save_messages,
                 params=params,
+                input_schema=input_schema,
+                output_schema=output_schema,
             )
 
     async def stream(
