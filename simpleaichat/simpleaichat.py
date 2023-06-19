@@ -154,6 +154,7 @@ class AIChat(BaseModel):
             system=system,
             save_messages=save_messages,
             params=params,
+            input_schema=input_schema,
         )
 
     def build_system(
@@ -379,4 +380,5 @@ class AsyncAIChat(AIChat):
             system=system,
             save_messages=save_messages,
             params=params,
+            input_schema=input_schema,
         )
