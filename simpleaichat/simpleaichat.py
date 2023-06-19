@@ -382,3 +382,12 @@ class AsyncAIChat(AIChat):
             params=params,
             input_schema=input_schema,
         )
+
+    @asynccontextmanager
+    async def session(self, **kwargs):
+        sess = self.new_session(return_session=True, **kwargs)
+        self.sessions[sess.id] = sess
+        try:
+            yield sess
+        finally:
+            self.delete_session(sess.id)
