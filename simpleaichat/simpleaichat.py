@@ -337,7 +337,7 @@ class AsyncAIChat(AIChat):
     ) -> str:
         # TODO: move to a __post_init__ in Pydantic 2.0
         if isinstance(self.client, Client):
-            self.client = AsyncClient()
+            self.client = AsyncClient(proxies=os.getenv("https_proxy"))
         sess = self.get_session(id)
         if tools:
             for tool in tools:
@@ -372,7 +372,7 @@ class AsyncAIChat(AIChat):
     ) -> str:
         # TODO: move to a __post_init__ in Pydantic 2.0
         if isinstance(self.client, Client):
-            self.client = AsyncClient()
+            self.client = AsyncClient(proxies=os.getenv("https_proxy"))
         sess = self.get_session(id)
         return sess.stream_async(
             prompt,
