@@ -81,3 +81,17 @@ async def wikipedia_search_lookup_async(query: str, sentences: int = 1) -> str:
     return await wikipedia_lookup_async(
         await wikipedia_search_async(query, 1), sentences
     )
+
+
+def fd(description: str):
+    return Field(description=description)
+
+
+# https://stackoverflow.com/a/58938747
+def remove_a_key(d, remove_key):
+    if isinstance(d, dict):
+        for key in list(d.keys()):
+            if key == remove_key:
+                del d[key]
+            else:
+                remove_a_key(d[key], remove_key)
