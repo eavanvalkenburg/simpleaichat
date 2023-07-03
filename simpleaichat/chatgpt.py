@@ -51,7 +51,17 @@ class ChatGPTSession(ChatSession):
             }
 
         system_message = ChatMessage(role="system", content=system or self.system)
-        user_message = ChatMessage(role="user", content=prompt)
+        if not input_schema:
+            user_message = ChatMessage(role="user", content=prompt)
+        else:
+            assert isinstance(
+                prompt, input_schema
+            ), f"prompt must be an instance of {input_schema.__name__}"
+            user_message = ChatMessage(
+                role="function",
+                content=prompt.model_dump_json(),
+                name=input_schema.__name__,
+            )
 
         gen_params = params or self.params
         data = {
