@@ -1,4 +1,4 @@
-from pydantic import HttpUrl
+from pydantic import HttpUrl, ConfigDict
 from httpx import Client, AsyncClient
 from typing import List, Dict, Set, Any
 import orjson
@@ -29,6 +29,7 @@ class ChatGPTSession(ChatSession):
     input_fields: Set[str] = {"role", "content"}
     system: str = "You are a helpful assistant."
     params: Dict[str, Any] = {"temperature": 0.7}
+    model_config: ConfigDict(arbitrary_types_allowed=True)
 
     def prepare_request(
         self,
@@ -81,7 +82,7 @@ class ChatGPTSession(ChatSession):
         return {
             "name": schema.__name__,
             "description": schema.__doc__,
-            "parameters": schema.schema(),
+            "parameters": schema.model_json_schema(),
         }
 
     def gen(

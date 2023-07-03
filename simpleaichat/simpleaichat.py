@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from .utils import wikipedia_search_lookup
-from .models import ChatMessage, ChatSession, orjson_dumps
+from .models import ChatMessage, ChatSession
 from .chatgpt import ChatGPTSession
 
 load_dotenv()
