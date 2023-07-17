@@ -1,15 +1,25 @@
 from pydantic import HttpUrl
 from httpx import Client, AsyncClient
-from typing import List, Dict, Union, Set, Any
+from typing import List, Dict, Set, Any
 import orjson
 
 from .models import ChatMessage, ChatSession
+from .prompts import TOOL_PROMPT, TOOL_INPUT_PROMPT
 
-tool_prompt = """From the list of tools below:
-- Reply ONLY with the number of the tool appropriate in response to the user's last message.
-- If no tool is appropriate, ONLY reply with \"0\".
 
-{tools}"""
+def response_to_chat_message(response: dict[str, Any]) -> ChatMessage | None:
+    """Converts a response from the API to a ChatMessage object."""
+    if "choices" in response and len(response["choices"]) > 0:
+        choices = response["choices"][0]["message"]
+        usage = response["usage"]
+        return ChatMessage(
+            role=choices["role"],
+            content=choices["content"],
+            prompt_length=usage["prompt_tokens"],
+            completion_length=usage["completion_tokens"],
+            total_length=usage["total_tokens"],
+        )
+    return None
 
 
 class ChatGPTSession(ChatSession):
@@ -23,8 +33,8 @@ class ChatGPTSession(ChatSession):
     def prepare_request(
         self,
         prompt: str,
-        system: str = None,
-        params: Dict[str, Any] = None,
+        system: str | None = None,
+        params: Dict[str, Any] | None = None,
         stream: bool = False,
     ):
         if self.api_type == "azure":
@@ -56,12 +66,14 @@ class ChatGPTSession(ChatSession):
     def gen(
         self,
         prompt: str,
-        client: Union[Client, AsyncClient],
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
+        client: Client,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
     ):
-        endpoint, headers, data, user_message = self.prepare_request(prompt, system, params)
+        endpoint, headers, data, user_message = self.prepare_request(
+            prompt, system, params
+        )
 
         r = client.post(
             endpoint,
@@ -69,40 +81,35 @@ class ChatGPTSession(ChatSession):
             headers=headers,
             timeout=None,
         )
-        r = r.json()
-
-        try:
-            content = r["choices"][0]["message"]["content"]
-            assistant_message = ChatMessage(
-                role=r["choices"][0]["message"]["role"],
-                content=content,
-                prompt_length=r["usage"]["prompt_tokens"],
-                completion_length=r["usage"]["completion_tokens"],
-                total_length=r["usage"]["total_tokens"],
+        if assistant_message := response_to_chat_message(r.json()):
+            self.add_messages(user_message, assistant_message, save_messages)
+            self.total_prompt_length += (
+                assistant_message.prompt_length
+                if assistant_message.prompt_length
+                else 0
             )
-
-            self.total_prompt_length += r["usage"]["prompt_tokens"]
-            self.total_completion_length += r["usage"]["completion_tokens"]
-            self.total_length += r["usage"]["total_tokens"]
-        except KeyError:
-            raise KeyError(f"No AI generation: {r}")
-
-        self.add_messages(user_message, assistant_message, save_messages)
-
-        return content
+            self.total_completion_length += (
+                assistant_message.completion_length
+                if assistant_message.completion_length
+                else 0
+            )
+            self.total_length += (
+                assistant_message.total_length if assistant_message.total_length else 0
+            )
+            return assistant_message.content
+        return ""
 
     def stream(
         self,
         prompt: str,
-        client: Union[Client, AsyncClient],
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
+        client: Client,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
     ):
         endpoint, headers, data, user_message = self.prepare_request(
             prompt, system, params, stream=True
         )
-
         with client.stream(
             "POST",
             endpoint,
@@ -116,34 +123,32 @@ class ChatGPTSession(ChatSession):
                     chunk = chunk[6:]  # SSE JSON chunks are prepended with "data: "
                     if chunk != "[DONE]":
                         chunk_dict = orjson.loads(chunk)
-                        delta = chunk_dict["choices"][0]["delta"].get("content")
-                        if delta:
-                            content.append(delta)
-                            yield {"delta": delta, "response": "".join(content)}
+                        if "choices" in chunk_dict and len(chunk_dict["choices"]) > 0:
+                            delta = chunk_dict["choices"][0]["delta"].get("content")
+                            if delta:
+                                content.append(delta)
+                                yield {"delta": delta, "response": "".join(content)}
 
-        # streaming does not currently return token counts
         assistant_message = ChatMessage(
             role="assistant",
             content="".join(content),
         )
 
         self.add_messages(user_message, assistant_message, save_messages)
-
         return assistant_message
 
     def gen_with_tools(
         self,
         prompt: str,
-        tools: List[Any],
-        client: Union[Client, AsyncClient],
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
-
+        tools: list[Any],
+        client: Client,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         # call 1: select tool and populate context
         tools_list = "\n".join(f"{i+1}: {f.__doc__}" for i, f in enumerate(tools))
-        tool_prompt_format = tool_prompt.format(tools=tools_list)
+        tool_prompt_format = TOOL_PROMPT.format(tools=tools_list)
 
         logit_bias_weight = 100
         logit_bias = {str(k): logit_bias_weight for k in range(15, 15 + len(tools) + 1)}
@@ -175,7 +180,16 @@ class ChatGPTSession(ChatSession):
                 "tool": None,
             }
         selected_tool = tools[tool_idx - 1]
-        context_dict = selected_tool(prompt)
+        tool_input = self.gen(
+            prompt,
+            client=client,
+            system=TOOL_INPUT_PROMPT.format(tool=selected_tool.__doc__),
+            save_messages=False,
+            params={"temperature": 0.0, "max_tokens": 200},
+        )
+        if tool_input == "None":
+            tool_input = ""
+        context_dict = selected_tool(tool_input)
         if isinstance(context_dict, str):
             context_dict = {"context": context_dict}
 
@@ -205,12 +219,14 @@ class ChatGPTSession(ChatSession):
     async def gen_async(
         self,
         prompt: str,
-        client: Union[Client, AsyncClient],
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
+        client: AsyncClient,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
     ):
-        endpoint, headers, data, user_message = self.prepare_request(prompt, system, params)
+        endpoint, headers, data, user_message = self.prepare_request(
+            prompt, system, params
+        )
 
         r = await client.post(
             endpoint,
@@ -218,32 +234,31 @@ class ChatGPTSession(ChatSession):
             headers=headers,
             timeout=None,
         )
-        r = r.json()
-
-        content = r["choices"][0]["message"]["content"]
-        assistant_message = ChatMessage(
-            role=r["choices"][0]["message"]["role"],
-            content=content,
-            prompt_length=r["usage"]["prompt_tokens"],
-            completion_length=r["usage"]["completion_tokens"],
-            total_length=r["usage"]["total_tokens"],
-        )
-
-        self.total_prompt_length += r["usage"]["prompt_tokens"]
-        self.total_completion_length += r["usage"]["completion_tokens"]
-        self.total_length += r["usage"]["total_tokens"]
-
-        self.add_messages(user_message, assistant_message, save_messages)
-
-        return content
+        if assistant_message := response_to_chat_message(r.json()):
+            self.add_messages(user_message, assistant_message, save_messages)
+            self.total_prompt_length += (
+                assistant_message.prompt_length
+                if assistant_message.prompt_length
+                else 0
+            )
+            self.total_completion_length += (
+                assistant_message.completion_length
+                if assistant_message.completion_length
+                else 0
+            )
+            self.total_length += (
+                assistant_message.total_length if assistant_message.total_length else 0
+            )
+            return assistant_message.content
+        return ""
 
     async def stream_async(
         self,
         prompt: str,
-        client: Union[Client, AsyncClient],
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
+        client: AsyncClient,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
     ):
         endpoint, headers, data, user_message = self.prepare_request(
             prompt, system, params, stream=True
@@ -279,15 +294,14 @@ class ChatGPTSession(ChatSession):
         self,
         prompt: str,
         tools: List[Any],
-        client: Union[Client, AsyncClient],
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
+        client: AsyncClient,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-
         # call 1: select tool and populate context
         tools_list = "\n".join(f"{i+1}: {f.__doc__}" for i, f in enumerate(tools))
-        tool_prompt_format = tool_prompt.format(tools=tools_list)
+        tool_prompt_format = TOOL_PROMPT.format(tools=tools_list)
 
         logit_bias_weight = 100
         logit_bias = {str(k): logit_bias_weight for k in range(15, 15 + len(tools) + 1)}

@@ -4,7 +4,7 @@ import dateutil
 from uuid import uuid4, UUID
 import csv
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 from httpx import Client, AsyncClient
 from typing import List, Dict, Union, Optional, Any
 import orjson
@@ -20,8 +20,8 @@ load_dotenv()
 
 class AIChat(BaseModel):
     client: Union[Client, AsyncClient]
-    default_session: Optional[ChatSession]
-    sessions: Dict[Union[str, UUID], ChatSession] = {}
+    default_session: Optional[ChatSession] = Field(default_factory=ChatSession)
+    sessions: dict[str | UUID, ChatSession] = {}
 
     class Config:
         arbitrary_types_allowed = True
@@ -30,16 +30,15 @@ class AIChat(BaseModel):
 
     def __init__(
         self,
-        character: str = None,
-        character_command: str = None,
-        system: str = None,
+        character: str | None = None,
+        character_command: str | None = None,
+        system: str | None = None,
         id: Union[str, UUID] = uuid4(),
         prime: bool = True,
         default_session: bool = True,
         console: bool = True,
         **kwargs,
     ):
-
         client = Client()
         system_format = self.build_system(character, character_command, system)
 
@@ -67,26 +66,28 @@ class AIChat(BaseModel):
         return_session: bool = False,
         **kwargs,
     ) -> Optional[ChatGPTSession]:
-
         if "model" not in kwargs:  # set default
             kwargs["model"] = "gpt-3.5-turbo"
         # TODO: Add support for more models (PaLM, Claude)
-        if "gpt-" in kwargs["model"]:
+        if "gpt-" in kwargs["model"] or (
+            "api_type" in kwargs and kwargs["api_type"] == "azure"
+        ):
             gpt_api_key = os.getenv("OPENAI_API_KEY") or kwargs.get("api_key")
             assert gpt_api_key, f"An API key for {kwargs['model'] } was not defined."
             sess = ChatGPTSession(
                 auth={
-                    "api_key": gpt_api_key,
+                    "api_key": SecretStr(gpt_api_key),
                 },
                 **kwargs,
             )
-
+        else:
+            raise NotImplementedError("Models other then GPT are not yet supported.")
         if return_session:
             return sess
         else:
             self.sessions[sess.id] = sess
 
-    def get_session(self, id: Union[str, UUID] = None) -> ChatSession:
+    def get_session(self, id: Union[str, UUID] | None = None) -> ChatSession:
         try:
             sess = self.sessions[id] if id else self.default_session
         except KeyError:
@@ -95,11 +96,11 @@ class AIChat(BaseModel):
             raise ValueError("No default session exists.")
         return sess
 
-    def reset_session(self, id: Union[str, UUID] = None) -> None:
+    def reset_session(self, id: Union[str, UUID]) -> None:
         sess = self.get_session(id)
         sess.messages = []
 
-    def delete_session(self, id: Union[str, UUID] = None) -> None:
+    def delete_session(self, id: Union[str, UUID]) -> None:
         sess = self.get_session(id)
         if self.default_session:
             if sess.id == self.default_session.id:
@@ -110,12 +111,12 @@ class AIChat(BaseModel):
     def __call__(
         self,
         prompt: str,
-        id: Union[str, UUID] = None,
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
-        tools: List[Any] = None,
-    ) -> str:
+        id: Union[str, UUID] | None = None,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+        tools: List[Any] | None = None,
+    ) -> str | dict[str, Any]:
         sess = self.get_session(id)
         if tools:
             for tool in tools:
@@ -141,10 +142,10 @@ class AIChat(BaseModel):
     def stream(
         self,
         prompt: str,
-        id: Union[str, UUID] = None,
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
+        id: Union[str, UUID] | None = None,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
     ) -> str:
         sess = self.get_session(id)
         return sess.stream(
@@ -156,9 +157,22 @@ class AIChat(BaseModel):
         )
 
     def build_system(
-        self, character: str = None, character_command: str = None, system: str = None
+        self,
+        character: str | None = None,
+        character_command: str | None = None,
+        system: str | None = None,
     ) -> str:
-        default = "You are a helpful assistant."
+        """
+        Builds the system prompt based on the provided parameters. If character is provided, the system prompt will be based on that using a wikipedia lookup of the provided name. Character command is then added to the system prompt if provided. If system is provided, the system prompt will be that. If none of the above are provided, the system prompt will be the default. The default is "You are a helpful assistant.".
+
+        Args:
+            character (str | None): The character to act as.
+            character_command (str | None): The command to execute as the character, only used when also providing a character.
+            system (str | None): The system prompt to use.
+
+        Returns:
+            str: The built system prompt.
+        """
         if character:
             character_prompt = """
             You must follow ALL these rules in all responses:
@@ -171,16 +185,15 @@ class AIChat(BaseModel):
                 character_system = """
                 - {0}
                 """
-                prompt = (
-                    prompt + "\n" + character_system.format(character_command).strip()
-                )
+                prompt += "\n" + character_system.format(character_command).strip()
             return prompt
-        elif system:
+        if system:
             return system
-        else:
-            return default
+        return "You are a helpful assistant."
 
-    def interactive_console(self, character: str = None, prime: bool = True) -> None:
+    def interactive_console(
+        self, character: str | None = None, prime: bool = True
+    ) -> None:
         console = Console(highlight=False)
         sess = self.default_session
         ai_text_color = "bright_magenta"
@@ -217,7 +230,10 @@ class AIChat(BaseModel):
 
     # Save/Load Chats given a session id
     def save_session(
-        self, id: Union[str, UUID] = None, format: str = "csv", minify: bool = False
+        self,
+        id: Union[str, UUID] | None = None,
+        format: str = "csv",
+        minify: bool = False,
     ):
         sess = self.get_session(id)
         sess_dict = sess.dict(
@@ -246,7 +262,6 @@ class AIChat(BaseModel):
                 )
 
     def load_session(self, input_path: str, id: Union[str, UUID] = uuid4(), **kwargs):
-
         assert input_path.endswith(".csv") or input_path.endswith(
             ".json"
         ), "Only CSV and JSON imports are accepted."
@@ -305,11 +320,11 @@ class AsyncAIChat(AIChat):
     async def __call__(
         self,
         prompt: str,
-        id: Union[str, UUID] = None,
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
-        tools: List[Any] = None,
+        id: Union[str, UUID] | None = None,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+        tools: List[Any] | None = None,
     ) -> str:
         # TODO: move to a __post_init__ in Pydantic 2.0
         if isinstance(self.client, Client):
@@ -339,10 +354,10 @@ class AsyncAIChat(AIChat):
     async def stream(
         self,
         prompt: str,
-        id: Union[str, UUID] = None,
-        system: str = None,
-        save_messages: bool = None,
-        params: Dict[str, Any] = None,
+        id: Union[str, UUID] | None = None,
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
     ) -> str:
         # TODO: move to a __post_init__ in Pydantic 2.0
         if isinstance(self.client, Client):

@@ -1,0 +1,24 @@
+{
+	"name": "Python 3",
+	"image": "mcr.microsoft.com/devcontainers/python:1-3.11-bullseye",
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			// Add the IDs of extensions you want installed when the container is created.
+			"extensions": [
+				"ms-azuretools.vscode-docker",
+				"ms-python.python",
+				"charliermarsh.ruff",
+				"github.copilot",
+				"github.copilot-labs",
+				"humao.rest-client",
+				"ms-toolsai.jupyter"
+			],
+			"settings": {
+				"extensions.verifySignature": false
+			}
+		}
+	},
+	"postCreateCommand": "pip install -U pip && pip install -e . && pip install -r dev_requirements.txt",
+	"remoteUser": "vscode"
+}

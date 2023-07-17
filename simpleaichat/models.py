@@ -1,5 +1,7 @@
-import datetime
+from abc import abstractmethod
+from datetime import datetime, timezone
 from uuid import uuid4, UUID
+from httpx import Client, AsyncClient
 
 from pydantic import BaseModel, SecretStr, HttpUrl, Field
 from typing import List, Dict, Union, Optional, Set, Any
@@ -14,16 +16,16 @@ def orjson_dumps(v, *, default, **kwargs):
 def now_tz():
     # Need datetime w/ timezone for cleanliness
     # https://stackoverflow.com/a/24666683
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 class ChatMessage(BaseModel):
     role: str
     content: str
-    received_at: datetime.datetime = Field(default_factory=now_tz)
-    prompt_length: Optional[int]
-    completion_length: Optional[int]
-    total_length: Optional[int]
+    received_at: datetime = Field(default_factory=now_tz)
+    prompt_length: Optional[int] = None
+    completion_length: Optional[int] = None
+    total_length: Optional[int] = None
 
     class Config:
         json_loads = orjson.loads
@@ -38,14 +40,14 @@ class ChatMessage(BaseModel):
 
 class ChatSession(BaseModel):
     id: Union[str, UUID] = Field(default_factory=uuid4)
-    created_at: datetime.datetime = Field(default_factory=now_tz)
+    created_at: datetime = Field(default_factory=now_tz)
     auth: Dict[str, SecretStr]
     api_url: HttpUrl
     model: str
     system: str
     params: Dict[str, Any] = {}
     messages: List[ChatMessage] = []
-    input_fields: Set[str] = {}
+    input_fields: Set[str] = Field(default_factory=Set)
     recent_messages: Optional[int] = None
     save_messages: Optional[bool] = True
     total_prompt_length: int = 0
@@ -82,9 +84,8 @@ class ChatSession(BaseModel):
         self,
         user_message: ChatMessage,
         assistant_message: ChatMessage,
-        save_messages: bool = None,
+        save_messages: bool | None = None,
     ) -> None:
-
         # if save_messages is explicitly defined, always use that choice
         # instead of the default
         to_save = isinstance(save_messages, bool)
@@ -96,3 +97,71 @@ class ChatSession(BaseModel):
         elif self.save_messages:
             self.messages.append(user_message)
             self.messages.append(assistant_message)
+
+    @abstractmethod
+    def gen(
+        self,
+        prompt: str,
+        client: Union[Client, AsyncClient],
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+    ) -> str:
+        pass
+
+    @abstractmethod
+    def stream(
+        self,
+        prompt: str,
+        client: Union[Client, AsyncClient],
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+    ) -> str:
+        pass
+
+    @abstractmethod
+    def gen_with_tools(
+        self,
+        prompt: str,
+        tools: List[Any],
+        client: Union[Client, AsyncClient],
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    async def gen_async(
+        self,
+        prompt: str,
+        client: Union[Client, AsyncClient],
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+    ) -> str:
+        pass
+
+    @abstractmethod
+    async def stream_async(
+        self,
+        prompt: str,
+        client: Union[Client, AsyncClient],
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+    ) -> str:
+        pass
+
+    @abstractmethod
+    async def gen_with_tools_async(
+        self,
+        prompt: str,
+        tools: List[Any],
+        client: Union[Client, AsyncClient],
+        system: str | None = None,
+        save_messages: bool | None = None,
+        params: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        pass
